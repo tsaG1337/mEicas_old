@@ -9,7 +9,18 @@ import tkFont #GUI implementation
 import socket #for IP determination
 import time
 
+# I2C Addresses
+ISL29023_ADDR = 0x44
+AnalogBoard_ADDR = 0x22
+
 Testmode = True  #Set to true to run it on not PiCas Computers (without I2C devices)
+
+
+if (not Testmode):
+    import analogBoard
+    analogBoard = analogBoard.init(AnalogBoard_ADDR)
+    print "device name:"
+    print analogBoard.getDeviceName()
 
 server = OSCServer(("0.0.0.0", 7000))
 OSCC = OSCClient()
