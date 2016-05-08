@@ -1,49 +1,61 @@
 #!/usr/bin/env python
 
 import Tkinter
-from Tkinter import Button, Tk, Canvas, Label
-# import OSC support ( PyOSC )
+from Tkinter import Button, Tk, Canvas, Label # import OSC support ( PyOSC )
 import ttk
 from OSC import OSCServer, OSCClient, OSCMessage
-import tkFont #GUI implementation
-import socket #for IP determination
-import time
-
-# I2C Addresses
-ISL29023_ADDR = 0x44
-AnalogBoard_ADDR = 0x22
-
-testmode = True                 #Set to true to run it on not PiCas Computers (without I2C devices)
-invertedScreenColor = True      #due to driver problems the screen color is inverted so we're unsing reverse colors
+import subprocess               # To start subprocesses (e.g. mpg123)
+import tkFont                   # GUI implementation
+import socket                   # For IP determination
+import time                     # Time
 
 
+testmode = True                 # Set to true to run it on not PiCas Computers (without I2C devices)
+invertedScreenColor = False       # Due to driver problems the screen color is inverted so we're unsing reverse colors
+
+# -----Peripheral initialization-----#
 if (not testmode):
-    #support for the analog Board
+    invertedScreenColor = False     # automatically switching with testmode :)
+
+    #Text to speech initialization
+    import pyttsx  # Text to speech support
+    engine = pyttsx.init()
+
+
+    # I2C Addresses
+    ISL29023_ADDR = 0x44
+    AnalogBoard_ADDR = 0x22
+
+    #analog Board
     import analogBoard
-    analogBoard = analogBoard.init(AnalogBoard_ADDR)
+    analogBoard = analogBoard.init(AnalogBoard_ADDR)    # Initialization
     print "device name:"
     print analogBoard.getDeviceName()
 
-    #initialize GPIO Pins
+    #ISL29023
+    import ISL29023
+    brightness = ISL29023.init(ISL29023_ADDR)
+
+
     import RPi.GPIO as GPIO
-    GPIO.setmode(GPIO.BOARD)    #use Board mapping as Pin names
-    dataPin = 29                #Serial Input 74HC165
-    clockEnablePin = 31          #Clock enable  74HC165
-    clockPin = 33               #CLK Output 74HC165
-    loadPin = 36                #data Load pin 74HC165
+    GPIO.setmode(GPIO.BOARD)        #use Board mapping as Pin names
+    dataPin = 29                    #Serial Input 74HC165
+    clockEnablePin = 31             #Clock enable  74HC165
+    clockPin = 33                   #CLK Output 74HC165
+    loadPin = 36                    #data Load pin 74HC165
     GPIO.setup(dataPin, GPIO.IN)
     GPIO.setup(clockEnablePin, GPIO.OUT)
     GPIO.setup(clockPin, GPIO.OUT)
     GPIO.setup(loadPin, GPIO.OUT)
 
+#-----OSC initialization-----#
 server = OSCServer(("0.0.0.0", 7000))
 OSCC = OSCClient()
 OSCC.connect(("192.168.178.48", 9000))  # connect to tablet
 
-c_height = 476 #the border lines are approx 2px
-c_width = 316
+#-----GUI initialization-----#
 
-#COLOR Sheme definitions
+#--COLOR Sheme definitions
 if invertedScreenColor:
     grey = "light slate grey"
     green = "purple"
@@ -51,17 +63,29 @@ if invertedScreenColor:
     red     = "cyan"
     white   = "black"
     black   = "white"
+else:
+    grey = "light slate grey"
+    green = "green"
+    yellow = "yellow"
+    red     = "red"
+    white   = "white"
+    black   = "black"
+
+c_height = 476 #the border lines are approx 2px
+c_width = 316 #316
 
 root = Tk()
 root.config(width=(c_width - 45), height=c_height, bg=black,cursor="none")
-if (not testmode):
-    root.attributes("-fullscreen", True) #if not in testmode switch to fullscreen
+if not testmode:
+    root.attributes("-fullscreen", True)    #if not in testmode switch to fullscreen
+
 
 textFont = tkFont.Font(family="Helvetica", size=36, weight="bold")
 
 # Declare Variables
-measuredItems = ["RPM", "Water TMP", "Oil Temp", "Oil Press", "EGT", "Fuel Flow", "Fuel Quant.", "Voltage"]
+measuredItems = ["RPM", "Water TMP", "Oil Temp", "Oil Press", "EGT", "Fuel Flow", "Fuel(left)", "Voltage"]
 errorBoxItems = ["TEMP", "PRESS", "FUEL", "POWER", "ERROR"]
+errorBoxItemsColor = ["red", "green", "green", "yellow", "green"]
 measuredItemsColor = [red, green, yellow, green, green, green, green]
 measuredItemsValue = [1, 65, 89, 10, 768, 7.8, 65, 12.6]
 buttonPressed = ([0,0,0,0,0,0,0,0])
@@ -135,14 +159,14 @@ class bootWindow:
 class mainWindow:
     def __init__(self,parent):
         self.isOpen = False
-        #left side
+        # left side
         # create Gauges (canvas,color, value, maxVal, name, Scale Factor)
         self.gauge1 = digitalGauge(parent, measuredItemsColor[0], 1, 500, measuredItems[0], 0.9)
         self.gauge2 = digitalGauge(parent, measuredItemsColor[1], 1, 100, measuredItems[1], 0.9)
         self.gauge3 = digitalGauge(parent, measuredItemsColor[2], 1, 120, measuredItems[2], 0.9)
         self.gauge4 = digitalGauge(parent, measuredItemsColor[1], 1, 020, measuredItems[3], 0.9)
 
-                #right side
+        # right side
         self.gauge5 = digitalGauge(parent, measuredItemsColor[1], 1, 1500,measuredItems[4], 0.9)
         self.gauge6 = digitalGauge(parent, measuredItemsColor[1], 1, 25, measuredItems[5], 0.9)
         self.gauge7 = digitalGauge(parent, measuredItemsColor[1], 1, 120,measuredItems[6], 0.9)
@@ -167,13 +191,13 @@ class mainWindow:
         self.gauge8.grid_remove()
         self.isOpen = False
     def show(self):
-        #left
+        # left
         self.gauge1.grid(column=1, row=0, sticky="WENS")
         self.gauge2.grid(column=1, row=1, sticky="WENS")
         self.gauge3.grid(column=1, row=2, sticky="WENS")
         self.gauge4.grid(column=1, row=3, sticky="WENS")
 
-        #right
+        # right
         self.gauge5.grid(column=2, row=0, sticky="WENS")
         self.gauge6.grid(column=2, row=1, sticky="WENS")
         self.gauge7.grid(column=2, row=2, sticky="WENS")
@@ -252,25 +276,19 @@ class digitalGauge(Canvas):
 class buttonSet:
     def __init__(self, window):
         # left
-        # mainButton = Button(window, text="MAIN", wraplength=1, command=lambda: loadActiveWindow.load("MAIN"),font=(textFont, 6),
-        #         bg=grey).grid(column=0, row=0, sticky="WENS")
-        mainButton = Label(window, text="MAIN", wraplength=1).grid(column=0, row=0, sticky="WENS")
+        mainButton = Label( window,  text="MAIN", wraplength=1 ).grid(column=0, row=0, sticky="WENS")
+        engButton = Label( window,  text="ENG", wraplength=1 ).grid(column=0, row=1, sticky="WENS")
+        navButton = Label( window,  text="NAV", wraplength=1 ).grid(column=0, row=2, sticky="WENS")
+        setupButton = Label( window,  text="SETUP", wraplength=1 ).grid(column=0, row=3, sticky="WENS")
 
-        engButton = Label(window, text="ENG", wraplength=1).grid(column=0, row=1, sticky="WENS")
-
-        navButton = Label(window, text="NAV", wraplength=1).grid(column=0, row=2, sticky="WENS")
-        setupButton = Label(window, text="SETUP", wraplength=1).grid(column=0, row=3, sticky="WENS")
         # right
-        plusButton = Label(window, text="+", wraplength=1).grid(column=3, row=0, sticky="WENS")
+        plusButton = Label( window,  text="+", wraplength=1 ).grid(column=3, row=0, sticky="WENS")
+        minusButton = Label( window,  text="-", wraplength=1 ).grid(column=3, row=1, sticky="WENS")
+        cancelButton = Label( window,  text="CANCEL", wraplength=1 ).grid(column=3, row=2, sticky="WENS")
+        enterButton = Label( window,  text="ENTER", wraplength=1 ).grid(column=3, row=3, sticky="WENS")
 
-        minusButton = Label(window, text="-", wraplength=1).grid(column=3, row=1, sticky="WENS")
-
-        cancelButton = Label(window, text="CANCEL", wraplength=1).grid(column=3, row=2, sticky="WENS")
-
-        enterButton = Label(window, text="ENTER", wraplength=1).grid(column=3, row=3, sticky="WENS")
-
-#initializing Classes
-canvas = background(root)   #Create Canvas Background
+# initializing Classes
+canvas = background(root)   # Create Canvas Background
 setupGrid(root)
 bootScreen = bootWindow(root)
 mainScreen = mainWindow(root)
@@ -324,22 +342,19 @@ class ActiveWindow:
                 self.activeWindow = selection
     def get(self):
         return self.activeWindow
-
-
-
 loadActiveWindow = ActiveWindow()
 
 def read_shift_regs():
     bitVal = 0
     bytesVal = 0
-    GPIO.output(clockEnablePin, GPIO.HIGH) #clock disable
+    GPIO.output(clockEnablePin, GPIO.HIGH)  # clock disable
     GPIO.output(loadPin, GPIO.LOW)
 
     time.sleep(0.005)
     GPIO.output(loadPin, GPIO.HIGH)
     GPIO.output(clockEnablePin, GPIO.LOW)  # clock enable
     for x in range(0, 8):
-        GPIO.output(clockPin, GPIO.HIGH)
+        GPIO.output(clockPin, GPIO.LOW)
         if GPIO.input(dataPin) == GPIO.LOW:
             bitVal = 0
             buttonPressed[x]= 0
@@ -349,8 +364,9 @@ def read_shift_regs():
         #print "Pin " + str(x) + ":" + str(bitVal)
         bytesVal |= (bitVal << ((8-1) - x))
         time.sleep(0.005)
-        GPIO.output(clockPin, GPIO.LOW)
+        GPIO.output(clockPin, GPIO.HIGH)
     return bytesVal
+
 
 def updateScreen():
 
@@ -366,6 +382,10 @@ def updateScreen():
     root.after(50, updateScreen) #update Screen every 50ms
     if not testmode:
         root.after(30, workButtons)
+        root.after(100, measuredItemsValue[4] == brightness.read)
+    #if testmode != True:
+        #do soemthing
+    #oscSend()
 
 
 
@@ -392,19 +412,32 @@ def oscSend():
 
 def workButtons():
     read_shift_regs()
-    if buttonPressed[0] == 1:
-        loadActiveWindow.load("NAV")
-    elif buttonPressed[1] == 1:
-        loadActiveWindow.load("ENG")
-    elif buttonPressed[2] == 1:
-        loadActiveWindow.load("MAIN")
-    elif buttonPressed[3] == 1:
+    if buttonPressed[0]==1:             #left side
         loadActiveWindow.load("SETUP")
-    elif buttonPressed[4] == 1:            #inverted on the right side of the Panel
-        pass                            #right side has still to be implemented into the software
+    elif buttonPressed[1]==1:
+        loadActiveWindow.load("NAV")
+        subprocess.Popen(['mpg123', "pullup.mp3"])
+    elif buttonPressed[2]==1:
+        loadActiveWindow.load("ENG")
+    elif buttonPressed[3]==1:
+        loadActiveWindow.load("MAIN")
+    elif buttonPressed[4]==1:           #right side (+)
+        engine.say("300")
+        engine.runAndWait()
+    elif buttonPressed[5]==1:           # (-)
+        pass
+    elif buttonPressed[6]==1:           # (cancel)
+        pass
+    elif buttonPressed[7]==1:           # (enter)
+        rate = engine.getProperty('rate')
+        engine.setProperty('rate', rate-40)
+        engine.say("Pull up! Pull up!")
+        engine.runAndWait()
+
 
 loadActiveWindow.load("MAIN")
 updateScreen()
+
 try:
     oscSend()
 except:
