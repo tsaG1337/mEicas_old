@@ -1,21 +1,31 @@
 #!/usr/bin/env python
 
 import Tkinter
-from Tkinter import Button, Tk, Canvas, Label # import OSC support ( PyOSC )
+from Tkinter import Button, Tk, Canvas, Label# import OSC support ( PyOSC )
+from PIL import ImageTk, Image
 import ttk
 from OSC import OSCServer, OSCClient, OSCMessage
 import subprocess               # To start subprocesses (e.g. mpg123)
 import tkFont                   # GUI implementation
 import socket                   # For IP determination
 import time                     # Time
+import logging                  # Log messages
+import gauges
 
 
-testmode = True                 # Set to true to run it on not PiCas Computers (without I2C devices)
-invertedScreenColor = False       # Due to driver problems the screen color is inverted so we're unsing reverse colors
+logging.basicConfig(level=logging.WARNING)        #DEBUG, INFO, WARNING, ERROR, CRITICAL
+
+testMode = False                                # Set to true to run it on not PiCas Computers (without I2C devices)
+invertedScreenColor = False                     # Due to driver problems the screen color is inverted so we're unsing reverse colors
+
+OSCServerIP = "0.0.0.0"
+OSCServerPort = 7000
+OSCServerIP = "192.168.178.48"
+OSCServerPort = 9000
 
 # -----Peripheral initialization-----#
-if (not testmode):
-    invertedScreenColor = False     # automatically switching with testmode :)
+if (not testMode):
+    invertedScreenColor = True     # automatically switching with test mode :)
 
     #Text to speech initialization
     import pyttsx  # Text to speech support
@@ -29,15 +39,16 @@ if (not testmode):
     #analog Board
     import analogBoard
     analogBoard = analogBoard.init(AnalogBoard_ADDR)    # Initialization
-    print "device name:"
+    logging.info("Analog Board called" + analogBoard.getDeviceName() + "initialized")
     print analogBoard.getDeviceName()
 
     #ISL29023
     import ISL29023
-    brightness = ISL29023.init(ISL29023_ADDR)
-
+    brightness = ISL29023.isl(ISL29023_ADDR)
+    logging.info("ISLS29023 brightness sensor initialized")
 
     import RPi.GPIO as GPIO
+    GPIO.setwarnings(False)
     GPIO.setmode(GPIO.BOARD)        #use Board mapping as Pin names
     dataPin = 29                    #Serial Input 74HC165
     clockEnablePin = 31             #Clock enable  74HC165
@@ -47,6 +58,34 @@ if (not testmode):
     GPIO.setup(clockEnablePin, GPIO.OUT)
     GPIO.setup(clockPin, GPIO.OUT)
     GPIO.setup(loadPin, GPIO.OUT)
+    logging.info("GPIO Pins initialized")
+    # IMU
+
+    import RTIMU
+    import os.path
+    import math
+
+    SETTINGS_FILE = "RTIMULib"
+    logging.info("Using settings file " + SETTINGS_FILE + ".ini")
+    if not os.path.exists(SETTINGS_FILE + ".ini"):
+        logging.warning("Settings file does not exist, will be created")
+    s = RTIMU.Settings(SETTINGS_FILE)
+    imu = RTIMU.RTIMU(s)
+    logging.info("IMU recognized: " + imu.IMUName())
+    if not imu.IMUInit():
+        logging.error("IMU Init Failed")
+        sys.exit(1)
+    else:
+        logging.info("IMU Init Succeeded")
+    #set any fusion parameters
+    imu.setSlerpPower(0.02)
+    imu.setGyroEnable(True)
+    imu.setAccelEnable(True)
+    imu.setCompassEnable(True)
+
+    logging.info("Recommended Poll Interval: %dmS\n" % imu.IMUGetPollInterval())
+else:
+    logging.warning("Starting in Testmode!")
 
 #-----OSC initialization-----#
 server = OSCServer(("0.0.0.0", 7000))
@@ -75,9 +114,10 @@ c_height = 476 #the border lines are approx 2px
 c_width = 316 #316
 
 root = Tk()
-root.config(width=(c_width - 45), height=c_height, bg=black,cursor="none")
-if not testmode:
-    root.attributes("-fullscreen", True)    #if not in testmode switch to fullscreen
+root.config(width=(c_width - 45), height=c_height, bg=black)
+if not testMode:
+    root.config(cursor="none")
+    root.attributes("-fullscreen", True)    #if not in test mode switch to fullscreen
 
 
 textFont = tkFont.Font(family="Helvetica", size=36, weight="bold")
@@ -88,7 +128,13 @@ errorBoxItems = ["TEMP", "PRESS", "FUEL", "POWER", "ERROR"]
 errorBoxItemsColor = ["red", "green", "green", "yellow", "green"]
 measuredItemsColor = [red, green, yellow, green, green, green, green]
 measuredItemsValue = [1, 65, 89, 10, 768, 7.8, 65, 12.6]
-buttonPressed = ([0,0,0,0,0,0,0,0])
+buttonPressed = ([0, 0, 0, 0, 0, 0, 0, 0])
+
+#Flight Data#
+roll = 0;
+pitch = 0;
+yaw = 0;
+
 
 def get_ip():
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -124,11 +170,13 @@ class background:
 
 class bootWindow:
     def __init__(self, parent):
-        print get_ip()
+        logging.info("Host IP: " +get_ip())
         self.screen = Canvas(parent, bg=black, height=480, width=320)
         self.screen.place(x=0,y=0)
         Testline = self.screen.create_line(160, 0, 160, 480, fill=red)
         Testline2 = self.screen.create_line(0, 240, 320, 240, fill=red)
+        self.img = ImageTk.PhotoImage(Image.open("images/logo.PNG"))
+        self.imglabel = Label(self.screen, image=self.img).place(x=160, y=150, anchor="center")
 
         self.text = self.screen.create_text(160,270 , text="Loading, Please wait...", fill=white, font=(textFont, 13))
 
@@ -158,19 +206,18 @@ class bootWindow:
 
 class mainWindow:
     def __init__(self,parent):
-        self.isOpen = False
         # left side
         # create Gauges (canvas,color, value, maxVal, name, Scale Factor)
-        self.gauge1 = digitalGauge(parent, measuredItemsColor[0], 1, 500, measuredItems[0], 0.9)
-        self.gauge2 = digitalGauge(parent, measuredItemsColor[1], 1, 100, measuredItems[1], 0.9)
-        self.gauge3 = digitalGauge(parent, measuredItemsColor[2], 1, 120, measuredItems[2], 0.9)
-        self.gauge4 = digitalGauge(parent, measuredItemsColor[1], 1, 020, measuredItems[3], 0.9)
+        self.gauge1 = gauges.hybridGauge(parent, measuredItemsColor[0], 1, 500, measuredItems[0], 0.9, white, black, textFont)
+        self.gauge2 = gauges.hybridGauge(parent, measuredItemsColor[1], 1, 100, measuredItems[1], 0.9, white, black, textFont)
+        self.gauge3 = gauges.hybridGauge(parent, measuredItemsColor[2], 1, 120, measuredItems[2], 0.9, white, black, textFont)
+        self.gauge4 = gauges.hybridGauge(parent, measuredItemsColor[1], 1, 020, measuredItems[3], 0.9, white, black, textFont)
 
         # right side
-        self.gauge5 = digitalGauge(parent, measuredItemsColor[1], 1, 1500,measuredItems[4], 0.9)
-        self.gauge6 = digitalGauge(parent, measuredItemsColor[1], 1, 25, measuredItems[5], 0.9)
-        self.gauge7 = digitalGauge(parent, measuredItemsColor[1], 1, 120,measuredItems[6], 0.9)
-        self.gauge8 = digitalGauge(parent, measuredItemsColor[1], 1, 18,measuredItems[7], 0.9)
+        self.gauge5 = gauges.hybridGauge(parent, measuredItemsColor[1], 1, 1500,measuredItems[4], 0.9, white, black, textFont)
+        self.gauge6 = gauges.hybridGauge(parent, measuredItemsColor[1], 1, 25, measuredItems[5], 0.9, white, black, textFont)
+        self.gauge7 = gauges.hybridGauge(parent, measuredItemsColor[1], 1, 120,measuredItems[6], 0.9, white, black, textFont)
+        self.gauge8 = gauges.hybridGauge(parent, measuredItemsColor[1], 1, 18,measuredItems[7], 0.9, white, black, textFont)
     def update(self):
         self.gauge1.updateval(measuredItemsValue[0])
         self.gauge2.updateval(measuredItemsValue[1])
@@ -189,7 +236,6 @@ class mainWindow:
         self.gauge6.grid_remove()
         self.gauge7.grid_remove()
         self.gauge8.grid_remove()
-        self.isOpen = False
     def show(self):
         # left
         self.gauge1.grid(column=1, row=0, sticky="WENS")
@@ -202,9 +248,6 @@ class mainWindow:
         self.gauge6.grid(column=2, row=1, sticky="WENS")
         self.gauge7.grid(column=2, row=2, sticky="WENS")
         self.gauge8.grid(column=2, row=3, sticky="WENS")
-        self.isOpen = True
-    def isActive(self):
-        return self.isOpen
 
 class engWindow:
     def __init__(self, parent):
@@ -213,19 +256,21 @@ class engWindow:
     def update(self):
         pass
     def hide(self):
-        self.value2.grid_remove()
+        pass
     def show(self):
-        self.value2.grid(column=1, row=1, sticky="WENS")
+        pass
 
 class navWindow:
     def __init__(self, parent):
-        pass
+        self.gauge1 = gauges.digitalGauge(parent, measuredItemsColor[4], 100,measuredItems[0], white, black, textFont)
+        #self.text = self.screen.create_text(120,270 , text="Nav Window here", fill=white, font=(textFont, 13))
+
     def update(self):
-        pass
+        self.gauge1.updateval(measuredItemsValue[4])
     def hide(self):
-        pass
+        self.gauge1.grid_remove()
     def show(self):
-        pass
+        self.gauge1.grid(column=1, row=0, sticky="WENS")
 
 class setupWindow:
     def __init__(self, parent):
@@ -237,41 +282,6 @@ class setupWindow:
     def show(self):
         pass
 
-class digitalGauge(Canvas):
-    def __init__(self, window,color, value, maxVal, name, gaugeScale):
-        Canvas.__init__(self, window, bg=black, height=100, width=100)
-        xval = 20
-        yval = 10
-        self.maxVal = maxVal
-        self.value = value
-
-        self.gaugeValue = self.maxVal / float(value)  # calculate the GaugeValue
-
-        self.hand = self.create_arc(xval, yval, (xval + 100 * gaugeScale),
-                                      (yval + 100 * gaugeScale), start=0,
-                                      extent=-(220 / self.gaugeValue), fill=color)  # Draw hand
-
-        self.outline = self.create_arc(xval - 3, yval - 3, (xval + 100 * gaugeScale + 3),
-                                         (yval + 100 * gaugeScale + 3), start=0, extent=-220, style="arc",
-                                         outline=white, width=2)  # draw outline
-
-        self.valueBox = self.create_rectangle((xval + 50 * gaugeScale), yval + 20 * gaugeScale,
-                                                xval + 100 * gaugeScale + 3, yval + 50 * gaugeScale,
-                                                outline=white,
-                                                width=2)  # draw Value Box
-
-        self.value1 = self.create_text(xval + 54 * gaugeScale, yval + 22 * gaugeScale, anchor="nw",
-                                         text=self.value,
-                                         fill=white, font=(textFont, int(round(15 * gaugeScale))))
-
-        self.value2 = self.create_text(xval-10, yval - 8, anchor="nw", text=name, fill=white,
-                                         font=(textFont, int(round(19 * gaugeScale))))
-
-
-    def updateval(self, valueUpdated):
-        self.itemconfig(self.value1, text=valueUpdated)
-        gaugeValue = self.maxVal / float(valueUpdated)
-        self.itemconfig(self.hand, extent=-(220 / gaugeValue))
 
 class buttonSet:
     def __init__(self, window):
@@ -287,6 +297,20 @@ class buttonSet:
         cancelButton = Label( window,  text="CANCEL", wraplength=1 ).grid(column=3, row=2, sticky="WENS")
         enterButton = Label( window,  text="ENTER", wraplength=1 ).grid(column=3, row=3, sticky="WENS")
 
+
+def readIMU():
+    if imu.IMURead():
+        # x, y, z = imu.getFusionData()
+        # print("%f %f %f" % (x,y,z))
+        data = imu.getIMUData()
+        fusionPose = data["fusionPose"]
+        print "r: %f p: %f y: %f" % (math.degrees(fusionPose[0]),
+        math.degrees(fusionPose[1]), math.degrees(fusionPose[2]))
+    else:
+        print "Sorry no data!"
+
+
+
 # initializing Classes
 canvas = background(root)   # Create Canvas Background
 setupGrid(root)
@@ -296,6 +320,7 @@ engScreen = engWindow(root)
 navScreen = navWindow(root)
 setupScreen = setupWindow(root)
 Buttons = buttonSet(root)  # drawing a Set of buttons
+
 
 class ActiveWindow:
     def __init__(self):
@@ -380,13 +405,11 @@ def updateScreen():
 
     loadActiveWindow.load(loadActiveWindow.get())
     root.after(50, updateScreen) #update Screen every 50ms
-    if not testmode:
+    if not testMode:
         root.after(30, workButtons)
-        root.after(100, measuredItemsValue[4] == brightness.read)
-    #if testmode != True:
-        #do soemthing
-    #oscSend()
 
+        #root.after(100, measuredItemsValue[4] == brightness.read)
+        #root.after(100, readIMU)
 
 
 def oscSend():
@@ -416,7 +439,7 @@ def workButtons():
         loadActiveWindow.load("SETUP")
     elif buttonPressed[1]==1:
         loadActiveWindow.load("NAV")
-        subprocess.Popen(['mpg123', "pullup.mp3"])
+        #subprocess.Popen(['mpg123', "pullup.mp3"])
     elif buttonPressed[2]==1:
         loadActiveWindow.load("ENG")
     elif buttonPressed[3]==1:
@@ -435,14 +458,13 @@ def workButtons():
         engine.runAndWait()
 
 
+
+
+
 loadActiveWindow.load("MAIN")
 updateScreen()
-
 try:
     oscSend()
 except:
-    print "failed to send OSC message"
-if not testmode:
-    print "shiftegister output:"
-    print read_shift_regs()
+    logging.warning('Watch out!')
 root.mainloop()
