@@ -1,5 +1,5 @@
-# mEicas
-This is the basic demonstration Software for the mEICAS Flight computer
+# mEicas (old)
+This is the basic demonstration Software for the mEICAS Flight computer. It was the first demonstrator for the mEICAS project (2014-2016)
 
 The code for the ADC-Board (MCU) is using the Arduino framework and is (mostly) written in C.
 
